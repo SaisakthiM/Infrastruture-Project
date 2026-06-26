@@ -14,6 +14,7 @@ var (
 	deployEnv         string
 	deployAutoApprove bool
 	deployTarget      string
+	deployReplace     string
 )
 
 var deployCmd = &cobra.Command{
@@ -30,7 +31,9 @@ blocks in each environment's terragrunt.hcl:
   5. prod-manage   (connects gateway container to kind network)
 
 Use --env to deploy a single environment.
-Use --target to apply only a specific resource (single env only).`,
+Use --target to apply only a specific resource (single env only).
+Use --replace to to remove a specific resource`,
+
 	Example: `  social-platform deploy                                     # deploy all
   social-platform deploy --env prod-docker                   # single env
   social-platform deploy --auto-approve                      # skip prompt
@@ -45,6 +48,8 @@ func init() {
 		"Skip interactive approval prompt (passes -auto-approve to terraform)")
 	deployCmd.Flags().StringVar(&deployTarget, "target", "",
 		"Target a specific resource address (e.g. docker_container.blog_db). Single --env required.")
+	deployCmd.Flags().StringVar(&deployReplace, "replace", "",
+		"Remove a specific resource address (e.g. docker_container.blog_db). Single --env required.")
 }
 
 func runDeploy(cmd *cobra.Command, args []string) error {
@@ -66,11 +71,17 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--target requires a specific --env (e.g. --env prod-docker)\n" +
 			"  terragrunt run --all does not support resource targeting")
 	}
+	if deployReplace != "" && env == deploy.EnvAll {
+		return fmt.Errorf("--replace requires a specific --env (e.g. --env prod-docker)\n" +
+			"  terragrunt run --all does not support resource targeting")
+	}
 
 	if env == deploy.EnvAll {
 		ui.Info("Deploying all environments (terragrunt run --all apply)")
 	} else if deployTarget != "" {
 		ui.Info("Deploying %s → targeting %s", env, deployTarget)
+	} else if deployReplace != "" {
+		ui.Info("Deploying %s → replacing %s", env, deployReplace)
 	} else {
 		ui.Info("Deploying %s", env)
 	}

@@ -40,16 +40,22 @@ func Environments() []string {
 // For a single env: terragrunt apply [--target=<resource>]
 // NOTE: --target is silently ignored when env == "all" (not supported by run --all).
 func Apply(cfg *config.Config, env Environment, autoApprove bool, target string) error {
-	return runTerragrunt(cfg, env, "apply", autoApprove, target)
+	return runTerragrunt(cfg, env, "apply", autoApprove, target, "")
+}
+
+func Replace(cfg *config.Config, env Environment, autoApprove bool, replace string) error {
+	return runTerragrunt(cfg, env, "apply", autoApprove, "", replace)
 }
 
 func Destroy(cfg *config.Config, env Environment, autoApprove bool) error {
-	return runTerragrunt(cfg, env, "destroy", autoApprove, "")
+	return runTerragrunt(cfg, env, "destroy", autoApprove, "", "")
 }
 
 func Status(cfg *config.Config, env Environment) error {
-	return runTerragrunt(cfg, env, "plan", false, "")
+	return runTerragrunt(cfg, env, "plan", false, "", "")
 }
+
+
 
 func Logs(cfg *config.Config, env Environment) error {
 	ui.Info("Streaming terragrunt debug output for %s", env)
@@ -65,7 +71,7 @@ func Logs(cfg *config.Config, env Environment) error {
 	return runInDir(cfg, env, "terragrunt", args...)
 }
 
-func runTerragrunt(cfg *config.Config, env Environment, command string, autoApprove bool, target string) error {
+func runTerragrunt(cfg *config.Config, env Environment, command string, autoApprove bool, target string, replace string) error {
 	var args []string
 
 	if env == EnvAll {
@@ -86,6 +92,9 @@ func runTerragrunt(cfg *config.Config, env Environment, command string, autoAppr
 		}
 		if target != "" {
 			args = append(args, "--target="+target)
+		}
+		if replace != "" {
+			args = append(args, "--replace="+replace)
 		}
 	}
 
