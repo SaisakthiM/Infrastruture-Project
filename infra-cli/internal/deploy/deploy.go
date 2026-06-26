@@ -74,9 +74,8 @@ func Logs(cfg *config.Config, env Environment, extraOut ...io.Writer) error {
 	return runInDir(cfg, env, "terragrunt", args, extraOut...)
 }
 
-// ensureKindCluster bootstraps the prod-social kind cluster (via a -target
-// apply of the null_resource that creates it) before any operation that
-// touches prod-social -- i.e. env == "all" or env == "prod-social".
+// ensureKindCluster bootstraps the prod-social kind cluster before any
+// operation that touches prod-social (env == "all" or env == "prod-social").
 //
 // Why this is needed: Terraform refreshes every resource already tracked in
 // state during *both* plan and apply, regardless of depends_on ordering.
@@ -84,9 +83,15 @@ func Logs(cfg *config.Config, env Environment, extraOut ...io.Writer) error {
 // cluster was deleted/recreated outside Terraform -- refreshing the
 // kubernetes_*/kubectl_manifest resources that live inside it fails with
 // "dial tcp ...: connect: connection refused" before the real apply graph
-// ever gets a chance to (re)create the cluster. Running a -target apply of
-// just null_resource.kind_cluster first guarantees the cluster exists and
-// is reachable before anything else in prod-social gets refreshed.
+// ever gets a chance to (re)create the cluster.
+//
+// Strategy: first check whether the cluster is already reachable via
+// `kubectl cluster-info --context kind-kind`. If it responds, a plain
+// -target apply is enough (no state changes needed). If it is unreachable
+// (first run, cluster was deleted, API server down), pass -replace so
+// Terraform actually destroys-and-recreates the null_resource even though
+// its id is already in state -- this is exactly what manual
+// `terragrunt apply -replace=null_resource.kind_cluster` does.
 func ensureKindCluster(cfg *config.Config, env Environment, extraOut ...io.Writer) error {
 	if env != EnvAll && env != EnvSocial {
 		return nil
@@ -100,12 +105,43 @@ func ensureKindCluster(cfg *config.Config, env Environment, extraOut ...io.Write
 	}
 
 	ui.Info("Bootstrapping kind cluster (prod-social) before continuing...")
-	args := []string{"apply", "-target=null_resource.kind_cluster", "-auto-approve"}
+
+	// Probe the cluster. A zero exit code means the API server is up.
+	clusterReachable := kindClusterReachable()
+
+	var args []string
+	if clusterReachable {
+		// Cluster exists and responds -- plain -target is sufficient to
+		// ensure the null_resource stays in sync without forcing recreation.
+		args = []string{"apply", "-target=null_resource.kind_cluster", "-auto-approve"}
+		ui.Dim.Println("  kind cluster reachable — verifying state only")
+	} else {
+		// Cluster is gone or unreachable -- force Terraform to recreate it
+		// even though the resource id is already in state.
+		args = []string{"apply", "-target=null_resource.kind_cluster", "-replace=null_resource.kind_cluster", "-auto-approve"}
+		ui.Dim.Println("  kind cluster unreachable — forcing recreation")
+	}
+
 	if err := runInDir(cfg, EnvSocial, "terragrunt", args, extraOut...); err != nil {
 		return fmt.Errorf("bootstrapping kind cluster: %w", err)
 	}
 	fmt.Println()
 	return nil
+}
+
+// kindClusterReachable returns true when `kubectl cluster-info
+// --context kind-kind` exits 0, meaning the API server is up and
+// the kubeconfig entry exists. Any error (binary not found, context
+// missing, connection refused) is treated as unreachable.
+func kindClusterReachable() bool {
+	if _, err := exec.LookPath("kubectl"); err != nil {
+		return false
+	}
+	cmd := exec.Command("kubectl", "cluster-info", "--context", "kind-kind")
+	// Suppress all output -- we only care about the exit code.
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run() == nil
 }
 
 func runTerragrunt(cfg *config.Config, env Environment, command string, autoApprove bool, target string, replace string, extraOut ...io.Writer) error {
