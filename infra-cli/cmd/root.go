@@ -34,5 +34,7 @@ func init() {
 		destroyCmd,
 		statusCmd,
 		logsCmd,
+		importCmd,
+		tuiCmd,
 	)
 }

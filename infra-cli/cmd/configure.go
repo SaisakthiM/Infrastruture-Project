@@ -10,7 +10,8 @@ import (
 )
 
 var (
-	regenOnly bool
+	regenOnly     bool
+	importantOnly bool
 )
 
 var configureCmd = &cobra.Command{
@@ -20,13 +21,18 @@ var configureCmd = &cobra.Command{
 configuration values (stored in ~/.social-platform/config.yaml), then
 writes terraform.tfvars files into each environment directory.
 
-Use --regen to skip prompts and just re-write tfvars from saved values.`,
+Use --regen to skip prompts and just re-write tfvars from saved values.
+Use --important to skip the internal DB/MinIO passwords and signing keys
+(they're filled in with your usual defaults / auto-generated) and only be
+asked for the real secrets: API keys, tokens, and the SSH deploy key.`,
 	RunE: runConfigure,
 }
 
 func init() {
 	configureCmd.Flags().BoolVar(&regenOnly, "regen", false,
 		"Regenerate tfvars from saved values without prompting")
+	configureCmd.Flags().BoolVar(&importantOnly, "important", false,
+		"Only prompt for important secrets (API keys, tokens, SSH key); fill internal DB/MinIO passwords with defaults")
 }
 
 func runConfigure(cmd *cobra.Command, args []string) error {
@@ -49,9 +55,14 @@ func runConfigure(cmd *cobra.Command, args []string) error {
 
 		// ── Step 2: Secrets (keychain) ─────────────────────────────────────────
 		ui.Step(2, "Secrets (stored in OS keychain — never written to disk as plaintext)")
-		ui.Dim.Println("  Press Enter to keep any existing value.")
+		if importantOnly {
+			ui.Dim.Println("  --important: internal DB/MinIO passwords + signing keys will use defaults.")
+			ui.Dim.Println("  Press Enter to keep any existing value for the rest.")
+		} else {
+			ui.Dim.Println("  Press Enter to keep any existing value.")
+		}
 		fmt.Println()
-		if err := secrets.PromptAll(); err != nil {
+		if err := secrets.PromptAll(importantOnly); err != nil {
 			return fmt.Errorf("collecting secrets: %w", err)
 		}
 

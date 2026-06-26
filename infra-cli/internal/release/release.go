@@ -72,10 +72,12 @@ func ListReleases() ([]GHRelease, error) {
 }
 
 // DownloadAndExtract downloads the infra asset for a release and extracts it
-// to destDir. Returns the path to the extracted infra/ directory.
+// to destDir. destDir itself becomes the infra root (environments/, modules/,
+// gitops/, projects/, atlantis.yaml as direct children) -- there is no
+// separate nested "infra/" folder anywhere in this layout.
 func DownloadAndExtract(rel *GHRelease, destDir string) (string, error) {
-	// Find the infra asset in this release.
 	var downloadURL string
+	usingSourceFallback := false
 	for _, a := range rel.Assets {
 		if a.Name == assetName {
 			downloadURL = a.BrowserDownloadURL
@@ -83,10 +85,11 @@ func DownloadAndExtract(rel *GHRelease, destDir string) (string, error) {
 		}
 	}
 	if downloadURL == "" {
-		// Fallback: try the source tarball for the tag.
+		// Fallback: GitHub's auto-generated source tarball for the tag.
 		downloadURL = fmt.Sprintf("https://github.com/%s/%s/archive/refs/tags/%s.tar.gz",
 			repoOwner, repoName, rel.TagName)
 		ui.Warn("No '%s' asset found in release %s, falling back to source tarball", assetName, rel.TagName)
+		usingSourceFallback = true
 	}
 
 	ui.Info("Downloading %s (%s)...", assetName, rel.TagName)
@@ -101,9 +104,9 @@ func DownloadAndExtract(rel *GHRelease, destDir string) (string, error) {
 	}
 	tmpFile.Close()
 
-	// Remove old infra dir.
-	infraDest := filepath.Join(destDir, "infra")
-	_ = os.RemoveAll(infraDest)
+	// Wipe and recreate destDir -- it IS the infra root now, no nested
+	// "infra" subpath to selectively clear.
+	_ = os.RemoveAll(destDir)
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return "", err
 	}
@@ -119,22 +122,99 @@ func DownloadAndExtract(rel *GHRelease, destDir string) (string, error) {
 		}
 	}
 
-	// The source tarball extracts to "Infrastruture-Project-<tag>/", remap.
-	entries, _ := os.ReadDir(destDir)
-	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), "Infrastruture-Project-") {
-			oldPath := filepath.Join(destDir, e.Name())
-			// Move Projects/Terraform/infra → infra
-			src := filepath.Join(oldPath, "Projects", "Terraform", "infra")
-			if _, err := os.Stat(src); err == nil {
-				_ = os.Rename(src, infraDest)
-			}
-			_ = os.RemoveAll(oldPath)
-			break
+	if usingSourceFallback {
+		// GitHub wraps the source tarball in a single "<repo>-<tag>/"
+		// folder. environments/, modules/, gitops/, projects/, and
+		// atlantis.yaml live directly at the repo root inside that
+		// wrapper (sibling to infra-cli/) -- there's no "infra/" subfolder
+		// to dig out, so hoist the wrapper's contents up into destDir and
+		// drop the CLI's own source (we don't need it here).
+		entries, err := os.ReadDir(destDir)
+		if err != nil {
+			return "", fmt.Errorf("reading extracted contents: %w", err)
 		}
+		var wrapper string
+		for _, e := range entries {
+			if e.IsDir() && strings.HasPrefix(e.Name(), repoName+"-") {
+				wrapper = filepath.Join(destDir, e.Name())
+				break
+			}
+		}
+		if wrapper == "" {
+			return "", fmt.Errorf("expected a '%s-<tag>' folder inside the source tarball, didn't find one", repoName)
+		}
+		if err := hoistContents(wrapper, destDir, []string{"infra-cli", "cli", ".git", ".github"}); err != nil {
+			return "", fmt.Errorf("rearranging extracted source tree: %w", err)
+		}
+		_ = os.RemoveAll(wrapper)
 	}
 
-	return infraDest, nil
+	// Verify we actually ended up with something usable instead of reporting
+	// success unconditionally.
+	if _, err := os.Stat(filepath.Join(destDir, "environments")); err != nil {
+		return "", fmt.Errorf("extraction finished but %s/environments was not found -- repo layout may have changed", destDir)
+	}
+
+	return destDir, nil
+}
+
+// hoistContents moves every entry of src (except names in skip) directly
+// into dst. Falls back to a recursive copy if os.Rename fails because src
+// and dst are on different filesystems (e.g. src under /tmp on a tmpfs).
+func hoistContents(src, dst string, skip []string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	skipSet := make(map[string]bool, len(skip))
+	for _, s := range skip {
+		skipSet[s] = true
+	}
+	for _, e := range entries {
+		if skipSet[e.Name()] {
+			continue
+		}
+		from := filepath.Join(src, e.Name())
+		to := filepath.Join(dst, e.Name())
+		_ = os.RemoveAll(to)
+		if err := os.Rename(from, to); err != nil {
+			if cerr := copyTree(from, to); cerr != nil {
+				return fmt.Errorf("moving %s: %w", e.Name(), cerr)
+			}
+			_ = os.RemoveAll(from)
+		}
+	}
+	return nil
+}
+
+// copyTree recursively copies a file or directory tree, used as a fallback
+// when os.Rename can't move across filesystem boundaries.
+func copyTree(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode())
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		out, err := os.Create(target)
+		if err != nil {
+			return err
+		}
+		defer out.Close()
+		_, err = io.Copy(out, in)
+		return err
+	})
 }
 
 func download(url string, dst *os.File) error {

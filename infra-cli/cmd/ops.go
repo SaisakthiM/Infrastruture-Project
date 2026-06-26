@@ -20,7 +20,7 @@ var (
 var destroyCmd = &cobra.Command{
 	Use:   "destroy",
 	Short: "Destroy Terraform/Terragrunt infrastructure",
-	Long: `Runs terragrunt destroy (or run-all destroy).
+	Long: `Runs terragrunt destroy (or run --all destroy).
 
 WARNING: This is destructive. Terragrunt destroys environments in reverse
 dependency order (prod-manage → prod-infra → prod-social → prod-docker →
@@ -123,7 +123,7 @@ var logsEnv string
 var logsCmd = &cobra.Command{
 	Use:   "logs",
 	Short: "Stream Terragrunt debug logs",
-	Long: `Runs terragrunt plan with --terragrunt-log-level debug and streams
+	Long: `Runs terragrunt plan with --log-level debug and streams
 all output live. Useful for diagnosing provider errors, state lock issues,
 or slow apply runs.`,
 	Example: `  social-platform logs                    # all environments

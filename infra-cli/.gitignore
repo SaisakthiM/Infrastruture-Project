@@ -1,0 +1,10 @@
+# Build outputs
+social-platform
+social-platform.exe
+dist/
+
+# Go toolchain
+vendor/
+
+# Config (never commit)
+~/.social-platform/

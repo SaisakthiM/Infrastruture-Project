@@ -13,12 +13,13 @@ import (
 var (
 	deployEnv         string
 	deployAutoApprove bool
+	deployTarget      string
 )
 
 var deployCmd = &cobra.Command{
 	Use:   "deploy",
 	Short: "Apply Terraform/Terragrunt infrastructure",
-	Long: `Runs terragrunt apply (or run-all apply for all environments).
+	Long: `Runs terragrunt apply (or run --all apply for all environments).
 
 The deploy order when running all is enforced by Terragrunt dependency
 blocks in each environment's terragrunt.hcl:
@@ -28,10 +29,12 @@ blocks in each environment's terragrunt.hcl:
   4. prod-infra    (otel-gateway, n8n, jenkins, observability)
   5. prod-manage   (connects gateway container to kind network)
 
-Use --env to deploy a single environment.`,
-	Example: `  social-platform deploy                   # deploy all
-  social-platform deploy --env prod-social  # single env
-  social-platform deploy --auto-approve     # skip confirmation`,
+Use --env to deploy a single environment.
+Use --target to apply only a specific resource (single env only).`,
+	Example: `  social-platform deploy                                     # deploy all
+  social-platform deploy --env prod-docker                   # single env
+  social-platform deploy --auto-approve                      # skip prompt
+  social-platform deploy --env prod-docker --target docker_container.blog_db`,
 	RunE: runDeploy,
 }
 
@@ -40,6 +43,8 @@ func init() {
 		fmt.Sprintf("Environment to deploy (%s)", strings.Join(deploy.Environments(), " | ")))
 	deployCmd.Flags().BoolVar(&deployAutoApprove, "auto-approve", false,
 		"Skip interactive approval prompt (passes -auto-approve to terraform)")
+	deployCmd.Flags().StringVar(&deployTarget, "target", "",
+		"Target a specific resource address (e.g. docker_container.blog_db). Single --env required.")
 }
 
 func runDeploy(cmd *cobra.Command, args []string) error {
@@ -56,8 +61,16 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 			deployEnv, strings.Join(deploy.Environments(), ", "))
 	}
 
+	// --target is not compatible with run --all.
+	if deployTarget != "" && env == deploy.EnvAll {
+		return fmt.Errorf("--target requires a specific --env (e.g. --env prod-docker)\n" +
+			"  terragrunt run --all does not support resource targeting")
+	}
+
 	if env == deploy.EnvAll {
-		ui.Info("Deploying all environments (terragrunt run-all apply)")
+		ui.Info("Deploying all environments (terragrunt run --all apply)")
+	} else if deployTarget != "" {
+		ui.Info("Deploying %s → targeting %s", env, deployTarget)
 	} else {
 		ui.Info("Deploying %s", env)
 	}
@@ -70,7 +83,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if err := deploy.Apply(cfg, env, deployAutoApprove); err != nil {
+	if err := deploy.Apply(cfg, env, deployAutoApprove, deployTarget); err != nil {
 		return err
 	}
 

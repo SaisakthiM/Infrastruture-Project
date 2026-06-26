@@ -5,6 +5,8 @@
 package secrets
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,17 +17,14 @@ import (
 	"github.com/SaisakthiM/Infrastruture-Project/cli/internal/ui"
 )
 
-// key builds the keychain key for a given env + variable.
 func key(env, variable string) string {
 	return fmt.Sprintf("%s/%s/%s", config.KeychainService, env, variable)
 }
 
-// Set stores a secret in the keychain.
 func Set(env, variable, value string) error {
 	return keyring.Set(config.KeychainService, key(env, variable), value)
 }
 
-// Get retrieves a secret from the keychain. Returns "" if not found.
 func Get(env, variable string) string {
 	val, err := keyring.Get(config.KeychainService, key(env, variable))
 	if err != nil {
@@ -34,55 +33,61 @@ func Get(env, variable string) string {
 	return val
 }
 
-// Has returns true if the secret exists in the keychain.
 func Has(env, variable string) bool {
 	return Get(env, variable) != ""
 }
 
 // ─── Secret definitions ─────────────────────────────────────────────────────
 
-// SecretDef describes a single secret to prompt for.
 type SecretDef struct {
-	Env      string
-	Key      string
-	Label    string
-	Multiline bool // true for SSH private keys
+	Env       string
+	Key       string
+	Label     string
+	Multiline bool
+	Internal  bool
+	Default   string
+	Generate  bool
 }
 
-// AllSecrets is the canonical list derived from all variable.tf / tfvars files.
 var AllSecrets = []SecretDef{
 	// prod-docker
-	{Env: "prod-docker", Key: "blog_db_password", Label: "Blog DB password"},
-	{Env: "prod-docker", Key: "blog_minio_password", Label: "Blog MinIO password"},
-	{Env: "prod-docker", Key: "blog_secret_key", Label: "Blog Django secret key"},
-	{Env: "prod-docker", Key: "notes_db_password", Label: "Notes DB password"},
-	{Env: "prod-docker", Key: "bank_db_password", Label: "Bank DB password"},
-	{Env: "prod-docker", Key: "doc_db_password", Label: "Document Platform DB password"},
-	{Env: "prod-docker", Key: "doc_minio_password", Label: "Document Platform MinIO password"},
+	{Env: "prod-docker", Key: "blog_db_password", Label: "Blog DB password", Internal: true, Default: "saisakthi2008"},
+	{Env: "prod-docker", Key: "blog_minio_password", Label: "Blog MinIO password", Internal: true, Default: "minioadmin"},
+	{Env: "prod-docker", Key: "blog_secret_key", Label: "Blog Django secret key", Internal: true, Generate: true},
+	{Env: "prod-docker", Key: "notes_db_password", Label: "Notes DB password", Internal: true, Default: "saisakthi2008"},
+	{Env: "prod-docker", Key: "bank_db_password", Label: "Bank DB password", Internal: true, Default: "saisakthi2008"},
+	{Env: "prod-docker", Key: "doc_db_password", Label: "Document Platform DB password", Internal: true, Default: "saisakthi2008"},
+	{Env: "prod-docker", Key: "doc_minio_password", Label: "Document Platform MinIO password", Internal: true, Default: "minioadmin"},
 	{Env: "prod-docker", Key: "doc_gemini_api_key", Label: "Gemini API key (Document Platform)"},
-	{Env: "prod-docker", Key: "doc_django_secret_key", Label: "Document Platform Django secret key"},
+	{Env: "prod-docker", Key: "doc_django_secret_key", Label: "Document Platform Django secret key", Internal: true, Default: "saisakthi"},
 	{Env: "prod-docker", Key: "api_key_weather", Label: "Weather API key"},
-	{Env: "prod-docker", Key: "whisper_db_password", Label: "Whisper DB password"},
-	{Env: "prod-docker", Key: "whisper_minio_password", Label: "Whisper MinIO password"},
-	{Env: "prod-docker", Key: "whisper_jwt_secret", Label: "Whisper JWT secret"},
+	{Env: "prod-docker", Key: "whisper_db_password", Label: "Whisper DB password", Internal: true, Default: "saisakthi2008"},
+	{Env: "prod-docker", Key: "whisper_minio_password", Label: "Whisper MinIO password", Internal: true, Default: "minioadmin"},
+	{Env: "prod-docker", Key: "whisper_jwt_secret", Label: "Whisper JWT secret", Internal: true, Default: "saisakthi"},
 
 	// prod-social
-	{Env: "prod-social", Key: "social_db_password", Label: "Social Media DB password"},
-	{Env: "prod-social", Key: "social_minio_password", Label: "Social Media MinIO password"},
+	{Env: "prod-social", Key: "social_db_password", Label: "Social Media DB password", Internal: true, Default: "saisakthi2008"},
+	{Env: "prod-social", Key: "social_minio_password", Label: "Social Media MinIO password", Internal: true, Default: "minioadmin"},
 	{Env: "prod-social", Key: "gitops_repo_ssh_key", Label: "ArgoCD deploy SSH private key", Multiline: true},
 
 	// prod-infra
-	{Env: "prod-infra", Key: "observability_redis_password", Label: "Observability Redis password"},
+	{Env: "prod-infra", Key: "observability_redis_password", Label: "Observability Redis password", Internal: true, Default: "saisakthi"},
 	{Env: "prod-infra", Key: "atlantis_gh_token", Label: "Atlantis GitHub personal access token"},
-	{Env: "prod-infra", Key: "atlantis_gh_webhook_secret", Label: "Atlantis GitHub webhook secret"},
-	{Env: "prod-infra", Key: "n8n_basic_auth_password", Label: "n8n basic auth password"},
+	{Env: "prod-infra", Key: "atlantis_gh_webhook_secret", Label: "Atlantis GitHub webhook secret", Internal: true, Default: "saisakthi@2008"},
+	{Env: "prod-infra", Key: "n8n_basic_auth_password", Label: "n8n basic auth password", Internal: true, Default: "saisakthi2008"},
 }
 
 // ─── Interactive prompting ───────────────────────────────────────────────────
 
-// PromptAll walks through all secrets grouped by environment and prompts the
-// user. Existing values are kept unless the user enters a new one.
-func PromptAll() error {
+func randomSecret() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "fallback-" + filepath.Base(os.TempDir())
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func PromptAll(importantOnly bool) error {
 	envGroups := map[string][]SecretDef{}
 	envOrder := []string{}
 	for _, s := range AllSecrets {
@@ -96,6 +101,26 @@ func PromptAll() error {
 		ui.Step(i+1, fmt.Sprintf("Secrets for %s", env))
 		for _, s := range envGroups[env] {
 			existing := Has(s.Env, s.Key)
+
+			if importantOnly && s.Internal {
+				if existing {
+					ui.Dim.Printf("  %s [already set, keeping]\n", s.Label)
+					continue
+				}
+				var val string
+				if s.Generate {
+					val = randomSecret()
+					ui.Dim.Printf("  %s [auto-generated]\n", s.Label)
+				} else {
+					val = s.Default
+					ui.Dim.Printf("  %s [using default: %s]\n", s.Label, val)
+				}
+				if err := Set(s.Env, s.Key, val); err != nil {
+					return fmt.Errorf("storing %s/%s: %w", s.Env, s.Key, err)
+				}
+				continue
+			}
+
 			var val string
 			if s.Multiline {
 				if existing {
@@ -106,11 +131,18 @@ func PromptAll() error {
 				val = ui.PromptSecret(s.Label, existing)
 			}
 			if val == "" && existing {
-				// User pressed Enter — keep the existing value.
 				continue
 			}
 			if val == "" {
-				ui.Warn("  Skipping %s (empty)", s.Key)
+				// For internal secrets with a default, set the default rather than leaving empty.
+				if s.Internal && s.Default != "" {
+					if err := Set(s.Env, s.Key, s.Default); err != nil {
+						return fmt.Errorf("storing %s/%s: %w", s.Env, s.Key, err)
+					}
+					ui.Dim.Printf("  %s [using default]\n", s.Label)
+				} else {
+					ui.Warn("  Skipping %s (empty)", s.Key)
+				}
 				continue
 			}
 			if err := Set(s.Env, s.Key, val); err != nil {
@@ -123,7 +155,8 @@ func PromptAll() error {
 
 // ─── tfvars generation ───────────────────────────────────────────────────────
 
-// GenerateAll writes terraform.tfvars for every environment that needs one.
+// GenerateAll writes terraform.tfvars for the 3 environments that need them.
+// prod-gateway and prod-manage have no variables and don't need a tfvars file.
 func GenerateAll(cfg *config.Config) error {
 	envPath := filepath.Join(cfg.InfraDir, "environments")
 	if err := generateDockerTfvars(cfg, envPath); err != nil {
@@ -225,7 +258,6 @@ func generateSocialTfvars(cfg *config.Config, envPath string) error {
 	g := func(k string) string { return Get("prod-social", k) }
 
 	sshKey := g("gitops_repo_ssh_key")
-	// Ensure the SSH key block ends with a newline.
 	if sshKey != "" && !strings.HasSuffix(sshKey, "\n") {
 		sshKey += "\n"
 	}
@@ -261,8 +293,6 @@ gitops_repo_ssh_key = <<EOF
 func generateInfraTfvars(cfg *config.Config, envPath string) error {
 	inf := cfg.ProdInfra
 	g := func(k string) string { return Get("prod-infra", k) }
-
-	n8nPassword := g("n8n_basic_auth_password")
 
 	content := fmt.Sprintf(`# AUTO-GENERATED by social-platform CLI — do not edit manually
 
@@ -305,7 +335,7 @@ atlantis_gh_webhook_secret = %q
 		inf.Domain,
 		inf.Domain,
 		inf.N8NUser,
-		n8nPassword,
+		g("n8n_basic_auth_password"),
 		g("observability_redis_password"),
 		inf.GitopsRepoURL,
 		inf.AtlantisGHUser,
