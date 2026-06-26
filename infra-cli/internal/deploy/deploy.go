@@ -37,27 +37,30 @@ func Environments() []string {
 
 // Apply runs terragrunt apply.
 // For env == "all": terragrunt run --all apply
-// For a single env: terragrunt apply [--target=<resource>]
-// NOTE: --target is silently ignored when env == "all" (not supported by run --all).
-func Apply(cfg *config.Config, env Environment, autoApprove bool, target string) error {
-	return runTerragrunt(cfg, env, "apply", autoApprove, target, "")
+// For a single env: terragrunt apply [--target=<resource>] [--replace=<resource>]
+// NOTE: --target/--replace are silently ignored when env == "all" (not
+// supported by run --all -- terragrunt has no concept of targeting a single
+// resource across multiple independent units).
+//
+// extraOut is optional: any writers passed in also receive a copy of the
+// command's combined stdout/stderr, in addition to the CLI's own os.Stdout.
+// The web UI uses this to stream output into a browser job log.
+func Apply(cfg *config.Config, env Environment, autoApprove bool, target string, replace string, extraOut ...io.Writer) error {
+	if err := ensureKindCluster(cfg, env, extraOut...); err != nil {
+		return err
+	}
+	return runTerragrunt(cfg, env, "apply", autoApprove, target, replace, extraOut...)
 }
 
-func Replace(cfg *config.Config, env Environment, autoApprove bool, replace string) error {
-	return runTerragrunt(cfg, env, "apply", autoApprove, "", replace)
+func Destroy(cfg *config.Config, env Environment, autoApprove bool, extraOut ...io.Writer) error {
+	return runTerragrunt(cfg, env, "destroy", autoApprove, "", "", extraOut...)
 }
 
-func Destroy(cfg *config.Config, env Environment, autoApprove bool) error {
-	return runTerragrunt(cfg, env, "destroy", autoApprove, "", "")
+func Status(cfg *config.Config, env Environment, extraOut ...io.Writer) error {
+	return runTerragrunt(cfg, env, "plan", false, "", "", extraOut...)
 }
 
-func Status(cfg *config.Config, env Environment) error {
-	return runTerragrunt(cfg, env, "plan", false, "", "")
-}
-
-
-
-func Logs(cfg *config.Config, env Environment) error {
+func Logs(cfg *config.Config, env Environment, extraOut ...io.Writer) error {
 	ui.Info("Streaming terragrunt debug output for %s", env)
 	ui.Dim.Println("  (Press Ctrl+C to stop)")
 	fmt.Println()
@@ -68,10 +71,44 @@ func Logs(cfg *config.Config, env Environment) error {
 	} else {
 		args = []string{"plan", "--log-level", "debug"}
 	}
-	return runInDir(cfg, env, "terragrunt", args...)
+	return runInDir(cfg, env, "terragrunt", args, extraOut...)
 }
 
-func runTerragrunt(cfg *config.Config, env Environment, command string, autoApprove bool, target string, replace string) error {
+// ensureKindCluster bootstraps the prod-social kind cluster (via a -target
+// apply of the null_resource that creates it) before any operation that
+// touches prod-social -- i.e. env == "all" or env == "prod-social".
+//
+// Why this is needed: Terraform refreshes every resource already tracked in
+// state during *both* plan and apply, regardless of depends_on ordering.
+// If the kind cluster's API server isn't reachable yet -- first run, or the
+// cluster was deleted/recreated outside Terraform -- refreshing the
+// kubernetes_*/kubectl_manifest resources that live inside it fails with
+// "dial tcp ...: connect: connection refused" before the real apply graph
+// ever gets a chance to (re)create the cluster. Running a -target apply of
+// just null_resource.kind_cluster first guarantees the cluster exists and
+// is reachable before anything else in prod-social gets refreshed.
+func ensureKindCluster(cfg *config.Config, env Environment, extraOut ...io.Writer) error {
+	if env != EnvAll && env != EnvSocial {
+		return nil
+	}
+
+	dir := workDir(cfg, EnvSocial)
+	if _, err := os.Stat(dir); err != nil {
+		// prod-social isn't installed yet -- let the normal flow surface
+		// the real "environment directory not found" error instead.
+		return nil
+	}
+
+	ui.Info("Bootstrapping kind cluster (prod-social) before continuing...")
+	args := []string{"apply", "-target=null_resource.kind_cluster", "-auto-approve"}
+	if err := runInDir(cfg, EnvSocial, "terragrunt", args, extraOut...); err != nil {
+		return fmt.Errorf("bootstrapping kind cluster: %w", err)
+	}
+	fmt.Println()
+	return nil
+}
+
+func runTerragrunt(cfg *config.Config, env Environment, command string, autoApprove bool, target string, replace string, extraOut ...io.Writer) error {
 	var args []string
 
 	if env == EnvAll {
@@ -98,7 +135,7 @@ func runTerragrunt(cfg *config.Config, env Environment, command string, autoAppr
 		}
 	}
 
-	return runInDir(cfg, env, "terragrunt", args...)
+	return runInDir(cfg, env, "terragrunt", args, extraOut...)
 }
 
 func workDir(cfg *config.Config, env Environment) string {
@@ -109,7 +146,11 @@ func workDir(cfg *config.Config, env Environment) string {
 	return filepath.Join(envPath, string(env))
 }
 
-func runInDir(cfg *config.Config, env Environment, binary string, args ...string) error {
+// runInDir runs binary with args inside env's working directory. Output is
+// always mirrored to os.Stdout (so the CLI/TUI behave exactly as before);
+// any writers in extraOut get a copy too (used by the web UI to capture
+// output into a per-job buffer without an unread, eventually-blocking pipe).
+func runInDir(cfg *config.Config, env Environment, binary string, args []string, extraOut ...io.Writer) error {
 	dir := workDir(cfg, env)
 	if _, err := os.Stat(dir); err != nil {
 		return fmt.Errorf("environment directory not found: %s\n  Run 'social-platform install' first", dir)
@@ -119,24 +160,22 @@ func runInDir(cfg *config.Config, env Environment, binary string, args ...string
 		return fmt.Errorf("%s not found — run 'social-platform install' to install prerequisites", binary)
 	}
 
-	RefreshHelmRepos()
+	RefreshHelmRepos(extraOut...)
 
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
 	cmd.Env = os.Environ()
 	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 
-	pr, pw, _ := os.Pipe()
-	cmd.Stdout = io.MultiWriter(os.Stdout, pw)
-	_ = pr
+	writers := append([]io.Writer{os.Stdout}, extraOut...)
+	mw := io.MultiWriter(writers...)
+	cmd.Stdout = mw
+	cmd.Stderr = mw
 
 	ui.Cyan.Printf("\n  $ terragrunt %v\n", args)
 	ui.Dim.Printf("  working dir: %s\n\n", dir)
 
 	if err := cmd.Start(); err != nil {
-		pw.Close()
 		return fmt.Errorf("starting %s: %w", binary, err)
 	}
 
@@ -150,7 +189,6 @@ func runInDir(cfg *config.Config, env Environment, binary string, args ...string
 	}()
 
 	err := cmd.Wait()
-	pw.Close()
 	signal.Stop(sigs)
 
 	if err != nil {
@@ -159,16 +197,12 @@ func runInDir(cfg *config.Config, env Environment, binary string, args ...string
 	return nil
 }
 
-func RunInDirRaw(cfg *config.Config, env Environment, binary string, args ...string) error {
-	return runInDir(cfg, env, binary, args...)
-}
-
 // RefreshHelmRepos runs `helm repo update` before terragrunt so a stale or
 // never-fetched local repo index cache (the "no cached repo found" error
 // from helm_release.argocd) doesn't break apply. Best-effort: if helm isn't
 // on PATH, or the update itself fails, just warn and let terragrunt run
 // anyway -- a real chart problem will surface from terraform directly.
-func RefreshHelmRepos() {
+func RefreshHelmRepos(extraOut ...io.Writer) {
 	if _, err := exec.LookPath("helm"); err != nil {
 		return
 	}
@@ -176,6 +210,9 @@ func RefreshHelmRepos() {
 	out, err := exec.Command("helm", "repo", "update").CombinedOutput()
 	if len(out) > 0 {
 		fmt.Print(string(out))
+		for _, w := range extraOut {
+			_, _ = w.Write(out)
+		}
 	}
 	if err != nil {
 		ui.Warn("helm repo update failed (continuing anyway): %v", err)

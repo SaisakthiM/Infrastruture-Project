@@ -176,7 +176,7 @@
       <div class="panel-title">Deploy Infrastructure</div>
       <div class="panel-desc">Runs <code style="color:var(--cyan)">terragrunt run --all apply</code> or targets a specific environment.</div>
       <div class="card">
-        <div class="form-row">
+        <div class="form-row-3">
           <div>
             <label>Environment</label>
             <select id="deploy-env"></select>
@@ -184,6 +184,10 @@
           <div>
             <label>Target Resource <span style="color:var(--muted)">(single env only)</span></label>
             <input type="text" id="deploy-target" placeholder="docker_container.blog_db" />
+          </div>
+          <div>
+            <label>Replace Resource <span style="color:var(--muted)">(force recreate, single env only)</span></label>
+            <input type="text" id="deploy-replace" placeholder="null_resource.kind_cluster" />
           </div>
         </div>
         <div class="btn-actions">
@@ -375,10 +379,11 @@ async function runCommand(cmd) {
     plan: 'plan-badge', logs: 'logs-badge'
   };
 
-  const env    = document.getElementById(envMap[cmd]).value;
-  const outEl  = document.getElementById(outMap[cmd]);
-  const badge  = document.getElementById(badgeMap[cmd]);
-  const target = cmd === 'deploy' ? document.getElementById('deploy-target').value.trim() : '';
+  const env     = document.getElementById(envMap[cmd]).value;
+  const outEl   = document.getElementById(outMap[cmd]);
+  const badge   = document.getElementById(badgeMap[cmd]);
+  const target  = cmd === 'deploy' ? document.getElementById('deploy-target').value.trim() : '';
+  const replace = cmd === 'deploy' ? document.getElementById('deploy-replace').value.trim() : '';
 
   outEl.textContent = '';
   badge.className = 'badge badge-running';
@@ -395,6 +400,7 @@ async function runCommand(cmd) {
 
   let body = { command: cmd, env, auto_approve: true };
   if (target) body.target = target;
+  if (replace) body.replace = replace;
 
   const res = await fetch('/api/run', {
     method: 'POST',

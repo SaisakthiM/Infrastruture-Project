@@ -8,3 +8,4 @@ vendor/
 
 # Config (never commit)
 ~/.social-platform/
+social-platform-webui

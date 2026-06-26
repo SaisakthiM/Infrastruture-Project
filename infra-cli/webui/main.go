@@ -12,13 +12,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"io/fs"
 	"log"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -159,6 +155,7 @@ type runRequest struct {
 	Command     string `json:"command"`     // "deploy" | "destroy" | "plan" | "logs"
 	Env         string `json:"env"`         // environment name
 	Target      string `json:"target"`      // optional resource target
+	Replace     string `json:"replace"`     // optional resource to force-replace (deploy only)
 	AutoApprove bool   `json:"auto_approve"`
 }
 
@@ -188,80 +185,32 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
+// jobWriter adapts a *Job into an io.Writer so deploy.Apply/Destroy/Status/
+// Logs can stream straight into the job's buffer (and from there, into the
+// browser via SSE) the same way they write to os.Stdout for the CLI/TUI.
+type jobWriter struct{ job *Job }
+
+func (w jobWriter) Write(p []byte) (int, error) {
+	w.job.write(p)
+	return len(p), nil
+}
+
 func executeCommand(cfg *config.Config, req runRequest, job *Job) error {
 	env := deploy.Environment(req.Env)
-	dir := deploy.WorkDir(cfg, env)
+	out := jobWriter{job: job}
 
-	if _, statErr := os.Stat(dir); statErr != nil {
-		return fmt.Errorf("environment directory not found: %s", dir)
-	}
-
-	var args []string
 	switch req.Command {
 	case "deploy":
-		if env == deploy.EnvAll {
-			args = []string{"run", "--all", "apply", "--non-interactive", "--auto-approve"}
-		} else {
-			args = []string{"apply", "-auto-approve"}
-			if req.Target != "" {
-				args = append(args, "--target="+req.Target)
-			}
-		}
+		return deploy.Apply(cfg, env, req.AutoApprove, req.Target, req.Replace, out)
 	case "destroy":
-		if env == deploy.EnvAll {
-			args = []string{"run", "--all", "destroy", "--non-interactive", "--auto-approve"}
-		} else {
-			args = []string{"destroy", "-auto-approve"}
-		}
+		return deploy.Destroy(cfg, env, req.AutoApprove, out)
 	case "plan":
-		if env == deploy.EnvAll {
-			args = []string{"run", "--all", "plan", "--non-interactive"}
-		} else {
-			args = []string{"plan"}
-		}
+		return deploy.Status(cfg, env, out)
 	case "logs":
-		if env == deploy.EnvAll {
-			args = []string{"run", "--all", "plan", "--non-interactive", "--log-level", "debug"}
-		} else {
-			args = []string{"plan", "--log-level", "debug"}
-		}
+		return deploy.Logs(cfg, env, out)
 	default:
 		return fmt.Errorf("unknown command: %s", req.Command)
 	}
-
-	deploy.RefreshHelmRepos()
-
-	cmd := exec.Command("terragrunt", args...)
-	cmd.Dir = dir
-	cmd.Env = os.Environ()
-
-	pr, pw, _ := os.Pipe()
-	cmd.Stdout = io.MultiWriter(pw)
-	cmd.Stderr = io.MultiWriter(pw)
-
-	if startErr := cmd.Start(); startErr != nil {
-		pw.Close()
-		pr.Close()
-		return fmt.Errorf("starting terragrunt: %w", startErr)
-	}
-
-	// Stream output to job buffer.
-	go func() {
-		buf := make([]byte, 4096)
-		for {
-			n, readErr := pr.Read(buf)
-			if n > 0 {
-				job.write(buf[:n])
-			}
-			if readErr != nil {
-				break
-			}
-		}
-	}()
-
-	err := cmd.Wait()
-	pw.Close()
-	return err
 }
 
 func handleJobStream(w http.ResponseWriter, r *http.Request) {
@@ -402,6 +351,3 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
 }
-
-// Ensure filepath is used.
-var _ = filepath.Join

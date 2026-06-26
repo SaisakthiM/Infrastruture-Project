@@ -32,12 +32,21 @@ blocks in each environment's terragrunt.hcl:
 
 Use --env to deploy a single environment.
 Use --target to apply only a specific resource (single env only).
-Use --replace to to remove a specific resource`,
+Use --replace to force a specific resource to be destroyed and recreated
+on this apply (single env only) -- same as Terraform's own -replace flag.
+
+prod-social special case: the kind cluster is bootstrapped automatically
+(via a -target apply of null_resource.kind_cluster) before anything else
+in prod-social runs, whenever --env is "all" or "prod-social". This avoids
+"dial tcp ...: connection refused" errors that happen when Terraform tries
+to refresh kubernetes_*/kubectl_manifest resources before the cluster (or
+its API server) actually exists.`,
 
 	Example: `  social-platform deploy                                     # deploy all
   social-platform deploy --env prod-docker                   # single env
   social-platform deploy --auto-approve                      # skip prompt
-  social-platform deploy --env prod-docker --target docker_container.blog_db`,
+  social-platform deploy --env prod-docker --target docker_container.blog_db
+  social-platform deploy --env prod-social --replace null_resource.kind_cluster`,
 	RunE: runDeploy,
 }
 
@@ -49,7 +58,7 @@ func init() {
 	deployCmd.Flags().StringVar(&deployTarget, "target", "",
 		"Target a specific resource address (e.g. docker_container.blog_db). Single --env required.")
 	deployCmd.Flags().StringVar(&deployReplace, "replace", "",
-		"Remove a specific resource address (e.g. docker_container.blog_db). Single --env required.")
+		"Force a specific resource address to be destroyed and recreated (e.g. docker_container.blog_db). Single --env required.")
 }
 
 func runDeploy(cmd *cobra.Command, args []string) error {
@@ -94,7 +103,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if err := deploy.Apply(cfg, env, deployAutoApprove, deployTarget); err != nil {
+	if err := deploy.Apply(cfg, env, deployAutoApprove, deployTarget, deployReplace); err != nil {
 		return err
 	}
 

@@ -242,7 +242,7 @@ func (m model) runOperation(opIdx int, env string) error {
 	switch opIdx {
 	case 0: // Deploy
 		fmt.Printf("  Deploying %s...\n\n", env)
-		return deploy.Apply(m.cfg, e, false, "")
+		return deploy.Apply(m.cfg, e, false, "", "")
 	case 1: // Destroy
 		fmt.Printf("  ⚠  Destroying %s — are you sure? [y/N]: ", env)
 		var ans string
