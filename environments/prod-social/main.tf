@@ -14,7 +14,8 @@ terraform {
 }
 
 provider "docker" {
-  host = "unix:///var/run/docker.sock"
+  # Was: unix:///home/saisakthi/.docker/desktop/docker.sock  ← default context, no images here
+  host = var.docker_host
 }
 
 provider "kubectl" {
@@ -158,6 +159,9 @@ resource "null_resource" "kind_images" {
   }
 
   provisioner "local-exec" {
+    environment = {
+      DOCKER_HOST = var.docker_host
+    }
     command = <<-EOT
       set -e
       cd ~/.cache/
@@ -225,6 +229,10 @@ resource "null_resource" "kind_load_images" {
   }
 
   provisioner "local-exec" {
+    environment = {
+      DOCKER_HOST = var.docker_host
+    }
+
     command = <<-EOT
       set -e
       # Verify all images are actually present before trying to load them.

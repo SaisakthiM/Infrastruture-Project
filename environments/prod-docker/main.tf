@@ -8,7 +8,7 @@ terraform {
 }
 
 provider "docker" {
-  host = "unix:///var/run/docker.sock"
+  host = var.docker_host
 }
 
 # Every resource below joins "gateway-net" by its literal name, not by a

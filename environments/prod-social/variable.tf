@@ -1,3 +1,7 @@
+variable "docker_host" {
+  description = "Docker provider socket/endpoint, e.g. unix:///home/you/.docker/desktop/docker.sock"
+}
+
 # ─── SOCIAL MEDIA ─────────────────────────────────────────────
 # social_db_name / social_db_user were dropped as variables -- they're
 # non-secret identifiers, now hardcoded literally in

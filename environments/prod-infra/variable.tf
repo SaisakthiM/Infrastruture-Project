@@ -1,3 +1,7 @@
+variable "docker_host" {
+  description = "Docker provider socket/endpoint, e.g. unix:///home/you/.docker/desktop/docker.sock"
+}
+
 # ─── n8n ────────────────────────────────────────────────────
 variable "main_server_ip" {
   description = "IP of your main server — used by n8n to reach apps"
