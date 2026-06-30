@@ -57,7 +57,7 @@ package-infra:
 	    --exclude='*/terraform.tfvars' \
 	    --exclude='*/.terraform.lock.hcl' \
 	    -czf $(BUILD_DIR)/infra.tar.gz \
-	    -C .. environments modules gitops projects atlantis.yaml
+	    -C ../Projects/Terraform infra/
 	@echo "Packaged: $(BUILD_DIR)/infra.tar.gz"
 	@ls -lh $(BUILD_DIR)/infra.tar.gz
 
