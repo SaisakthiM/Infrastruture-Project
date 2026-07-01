@@ -6,8 +6,10 @@ package config
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -197,41 +199,137 @@ var knownProjectDirs = []string{
 }
 
 // looksLikeProjectsDir reports whether dir contains at least one of the
-// known project subfolders, i.e. it's actually the "projects/" root and not
-// some unrelated directory.
+// known project subfolders (case-insensitive), i.e. it's actually the
+// "projects/" root and not some unrelated directory. Falls back to "it's a
+// non-empty directory literally named projects" so renamed/reorganized
+// project folders still auto-detect instead of forcing manual entry.
 func looksLikeProjectsDir(dir string) bool {
-	info, err := os.Stat(dir)
-	if err != nil || !info.IsDir() {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
 		return false
 	}
-	for _, name := range knownProjectDirs {
-		if st, err := os.Stat(filepath.Join(dir, name)); err == nil && st.IsDir() {
-			return true
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		for _, name := range knownProjectDirs {
+			if strings.EqualFold(e.Name(), name) {
+				return true
+			}
 		}
 	}
-	return false
+	// No exact known-name match — if the directory itself is called
+	// "projects" and isn't empty, trust it rather than giving up.
+	return strings.EqualFold(filepath.Base(dir), "projects") && len(entries) > 0
 }
 
 // DetectProjectsDir scans the usual candidate locations for the "projects"
 // directory (sibling of "environments" inside the infra monorepo) and
-// returns the first absolute path that looks right. Returns "" if nothing
-// was found — callers should fall back to prompting the user.
+// returns the first absolute path that looks right. If neither fast
+// candidate pans out, it falls back to a bounded scan starting from the
+// user's home directory. Returns "" if nothing was found — callers should
+// fall back to prompting the user.
 func DetectProjectsDir(infraDir string) string {
-	if infraDir == "" {
-		return ""
+	if infraDir != "" {
+		candidates := []string{
+			filepath.Join(infraDir, "projects"),                // infra-dir/projects (standard layout)
+			filepath.Join(filepath.Dir(infraDir), "projects"), // sibling of infra-dir
+		}
+		for _, c := range candidates {
+			abs, err := filepath.Abs(c)
+			if err != nil {
+				continue
+			}
+			if looksLikeProjectsDir(abs) {
+				return abs
+			}
+		}
 	}
-	candidates := []string{
-		filepath.Join(infraDir, "projects"),          // infra-dir/projects (standard layout)
-		filepath.Join(filepath.Dir(infraDir), "projects"), // sibling of infra-dir
+	return scanHomeForProjectsDir()
+}
+
+// scanNoDescend lists directory names we never walk into: dependency
+// caches, VCS internals, build output, and OS/profile noise. Keeps the
+// home-directory scan fast and out of places the projects dir can't be.
+var scanNoDescend = map[string]bool{
+	"node_modules": true, ".git": true, ".venv": true, "venv": true,
+	"vendor": true, "target": true, "dist": true, "build": true, "bin": true,
+	"__pycache__": true, ".cache": true, ".npm": true, ".cargo": true,
+	"AppData": true, "Library": true, ".Trash": true, ".vscode": true,
+	"$Recycle.Bin": true, "System Volume Information": true,
+}
+
+// maxScanDepth bounds how many directory levels deep (relative to $HOME)
+// the scan will descend, so it stays fast even on large home directories.
+const maxScanDepth = 8
+
+// scoreProjectsDir counts how many known project subfolders (case-insensitive)
+// live directly inside dir. Used to rank candidates found during the scan.
+func scoreProjectsDir(dir string) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return -1
 	}
-	for _, c := range candidates {
-		abs, err := filepath.Abs(c)
-		if err != nil {
+	score := 0
+	for _, e := range entries {
+		if !e.IsDir() {
 			continue
 		}
-		if looksLikeProjectsDir(abs) {
-			return abs
+		for _, name := range knownProjectDirs {
+			if strings.EqualFold(e.Name(), name) {
+				score++
+				break
+			}
 		}
 	}
-	return ""
+	return score
+}
+
+// scanHomeForProjectsDir walks the user's home directory (bounded depth,
+// skipping dependency/VCS/build noise) looking for a folder that looks like
+// the real "projects" directory: either literally named "projects" with at
+// least one recognisable subfolder inside (strongest signal — returned
+// immediately), or whichever folder scores highest against knownProjectDirs.
+// Handles paths with spaces natively since it's all plain Go strings, no
+// shell involved. Returns "" if nothing reasonable turned up.
+func scanHomeForProjectsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	home = filepath.Clean(home)
+	homeDepth := strings.Count(home, string(filepath.Separator))
+
+	bestPath := ""
+	bestScore := 0
+
+	_ = filepath.WalkDir(home, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return nil // unreadable entries don't stop the scan
+		}
+		name := d.Name()
+		if path != home {
+			if scanNoDescend[name] || (strings.HasPrefix(name, ".") && name != ".") {
+				return filepath.SkipDir
+			}
+		}
+		if strings.Count(filepath.Clean(path), string(filepath.Separator))-homeDepth > maxScanDepth {
+			return filepath.SkipDir
+		}
+
+		score := scoreProjectsDir(path)
+		if score <= 0 {
+			return nil
+		}
+		if strings.EqualFold(name, "projects") {
+			bestPath = path
+			return fs.SkipAll // literally named "projects" + real subfolders — good enough, stop
+		}
+		if score > bestScore {
+			bestPath, bestScore = path, score
+		}
+		return nil
+	})
+
+	return bestPath
 }

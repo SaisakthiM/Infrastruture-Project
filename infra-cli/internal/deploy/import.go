@@ -14,15 +14,17 @@ import (
 	"github.com/SaisakthiM/Infrastruture-Project/cli/internal/ui"
 )
 
-// ResourceKind classifies a Docker resource type for import.
+// ResourceKind classifies a resource type for import.
 type ResourceKind string
 
 const (
-	KindVolume    ResourceKind = "volume"
+	KindVolume ResourceKind = "volume"
 	KindContainer ResourceKind = "container"
 	// KindImage is intentionally omitted: kreuzwerker/docker v3.x does not
 	// support terraform import for docker_image resources. Images are always
 	// rebuilt by Terraform on the next apply.
+	KindNetwork     ResourceKind = "network"      // prod-gateway
+	KindHelmRelease ResourceKind = "helm_release" // prod-social
 )
 
 // ImportEntry maps a Terraform resource address to its Docker lookup name.
@@ -265,5 +267,3 @@ func fullContainerID(nameOrID string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
-
-
