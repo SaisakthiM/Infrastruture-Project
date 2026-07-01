@@ -77,6 +77,7 @@ var AllSecrets = []SecretDef{
 	{Env: "prod-infra", Key: "atlantis_gh_token", Label: "Atlantis GitHub personal access token"},
 	{Env: "prod-infra", Key: "atlantis_gh_webhook_secret", Label: "Atlantis GitHub webhook secret", Internal: true, Default: "saisakthi@2008"},
 	{Env: "prod-infra", Key: "n8n_basic_auth_password", Label: "n8n basic auth password", Internal: true, Default: "saisakthi2008"},
+	{Env: "prod-infra", Key: "docker_host", Label: "Docker socket path", Internal: true, Default: "unix:///var/run/docker.sock"},
 }
 
 // ─── Interactive prompting ───────────────────────────────────────────────────
