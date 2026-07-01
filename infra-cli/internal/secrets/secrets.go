@@ -380,6 +380,7 @@ atlantis_gh_webhook_secret = %q
 		inf.AtlantisGHUser,
 		g("atlantis_gh_token"),
 		g("atlantis_gh_webhook_secret"),
+		g("docker_host"),
 	)
 	return write(filepath.Join(envPath, "prod-infra", "terraform.tfvars"), content)
 }
