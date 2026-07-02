@@ -21,6 +21,34 @@ func key(env, variable string) string {
 	return fmt.Sprintf("%s/%s/%s", config.KeychainService, env, variable)
 }
 
+// dockerHostDefault picks a sane default for the docker_host secret.
+//
+// Docker Desktop on Linux does NOT listen on the standard
+// /var/run/docker.sock -- it listens on ~/.docker/desktop/docker.sock. The
+// previous hardcoded default of "unix:///var/run/docker.sock" meant
+// Terraform's docker provider silently connected to a DIFFERENT daemon
+// instance than whatever `docker` CLI context the terminal was using
+// (confirmed via `docker context ls` showing desktop-linux as the active
+// context, while prod-infra's stored secret pointed elsewhere). That caused
+// Terraform to see containers as "already exists" that `docker inspect`
+// couldn't find on the socket the terminal was actually talking to, and
+// vice versa.
+//
+// This checks for the Desktop socket first (since `docker context ls`
+// showed desktop-linux as this machine's active context) and only falls
+// back to /var/run/docker.sock if it's not present -- e.g. on a machine
+// running plain dockerd instead of Docker Desktop.
+func dockerHostDefault() string {
+	home, err := os.UserHomeDir()
+	if err == nil {
+		desktopSock := filepath.Join(home, ".docker", "desktop", "docker.sock")
+		if _, statErr := os.Stat(desktopSock); statErr == nil {
+			return "unix://" + desktopSock
+		}
+	}
+	return "unix:///var/run/docker.sock"
+}
+
 func Set(env, variable, value string) error {
 	return keyring.Set(config.KeychainService, key(env, variable), value)
 }
@@ -51,7 +79,7 @@ type SecretDef struct {
 
 var AllSecrets = []SecretDef{
 	// prod-docker
-	{Env: "prod-docker", Key: "docker_host", Label: "Docker socket path", Internal: true, Default: "unix:///var/run/docker.sock"},
+	{Env: "prod-docker", Key: "docker_host", Label: "Docker socket path", Internal: true, Default: dockerHostDefault()},
 	{Env: "prod-docker", Key: "blog_db_password", Label: "Blog DB password", Internal: true, Default: "saisakthi2008"},
 	{Env: "prod-docker", Key: "blog_minio_password", Label: "Blog MinIO password", Internal: true, Default: "minioadmin"},
 	{Env: "prod-docker", Key: "blog_secret_key", Label: "Blog Django secret key", Internal: true, Generate: true},
@@ -67,7 +95,7 @@ var AllSecrets = []SecretDef{
 	{Env: "prod-docker", Key: "whisper_jwt_secret", Label: "Whisper JWT secret", Internal: true, Default: "saisakthi"},
 
 	// prod-social
-	{Env: "prod-social", Key: "docker_host", Label: "Docker socket path (prod-social)", Internal: true, Default: "unix:///var/run/docker.sock"},
+	{Env: "prod-social", Key: "docker_host", Label: "Docker socket path (prod-social)", Internal: true, Default: dockerHostDefault()},
 	{Env: "prod-social", Key: "social_db_password", Label: "Social Media DB password", Internal: true, Default: "saisakthi2008"},
 	{Env: "prod-social", Key: "social_minio_password", Label: "Social Media MinIO password", Internal: true, Default: "minioadmin"},
 	{Env: "prod-social", Key: "gitops_repo_ssh_key", Label: "ArgoCD deploy SSH private key", Multiline: true},
@@ -77,7 +105,7 @@ var AllSecrets = []SecretDef{
 	{Env: "prod-infra", Key: "atlantis_gh_token", Label: "Atlantis GitHub personal access token"},
 	{Env: "prod-infra", Key: "atlantis_gh_webhook_secret", Label: "Atlantis GitHub webhook secret", Internal: true, Default: "saisakthi@2008"},
 	{Env: "prod-infra", Key: "n8n_basic_auth_password", Label: "n8n basic auth password", Internal: true, Default: "saisakthi2008"},
-	{Env: "prod-infra", Key: "docker_host", Label: "Docker socket path", Internal: true, Default: "unix:///var/run/docker.sock"},
+	{Env: "prod-infra", Key: "docker_host", Label: "Docker socket path", Internal: true, Default: dockerHostDefault()},
 }
 
 // ─── Interactive prompting ───────────────────────────────────────────────────
