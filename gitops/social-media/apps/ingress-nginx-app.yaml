@@ -30,7 +30,7 @@ spec:
                 prometheus.io/scrape: "true"
                 prometheus.io/port: "10254"
             serviceMonitor:
-              enabled: true
+              enabled: false
               namespace: monitoring
               interval: 30s
               additionalLabels:

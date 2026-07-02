@@ -295,6 +295,10 @@ resource "helm_release" "argocd" {
     {
       name  = "configs.params.server\\.rootpath"
       value = "/argocd"
+    },
+    {
+      name  = "configs.params.server\\.basehref"
+      value = "/argocd"
     }
   ]
 }
@@ -343,7 +347,7 @@ resource "kubernetes_secret_v1" "gitops_repo_credentials" {
   }
   data = {
     type          = "git"
-    url           = "git@github.com:SaisakthiM/Coding-Project.git"
+    url           = var.gitops_repo_url
     sshPrivateKey = var.gitops_repo_ssh_key
   }
 }
@@ -392,7 +396,7 @@ resource "kubectl_manifest" "app_of_apps_social" {
       source:
         repoURL: ${var.gitops_repo_url}
         targetRevision: HEAD
-        path: Projects/Finished Projects/Docker/Terraform/infra/gitops/social-media/apps
+        path: gitops/social-media/apps
         directory:
           recurse: false
       destination:

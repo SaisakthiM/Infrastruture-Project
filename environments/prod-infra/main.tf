@@ -213,9 +213,7 @@ resource "docker_container" "jenkins_agent" {
     name = "gateway-net"
   }
   volumes {
-    # FIXED: was a hardcoded path into the old environments/dev/ folder.
-    # Now points at this environment's own tfvars.
-    host_path      = "/home/saisakthi/Coding-Project/Projects/Finished Projects/Docker/Terraform/environments/prod-infra/terraform.tfvars"
+    host_path      = abspath("${path.module}/variable.tf")
     container_path = "/etc/terraform/terraform.tfvars"
   }
 
@@ -313,7 +311,7 @@ resource "docker_container" "atlantis" {
     "ATLANTIS_GH_USER=${var.atlantis_gh_user}",
     "ATLANTIS_GH_TOKEN=${var.atlantis_gh_token}",
     "ATLANTIS_GH_WEBHOOK_SECRET=${var.atlantis_gh_webhook_secret}",
-    "ATLANTIS_REPO_ALLOWLIST=github.com/SaisakthiM/Coding-Project",
+    "ATLANTIS_REPO_ALLOWLIST=${var.gitops_repo_url}",
     "ATLANTIS_PORT=4141",
     "ATLANTIS_ATLANTIS_URL=https://${var.domain}/atlantis",
     "ATLANTIS_DATA_DIR=/atlantis-data",
