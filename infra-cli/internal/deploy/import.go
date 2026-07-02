@@ -1,6 +1,7 @@
-// Package deploy - import.go handles terraform state import for prod-docker
-// resources by auto-detecting running Docker containers, volumes, and images,
-// then running "terragrunt import" with a per-resource confirmation step.
+// Package deploy - import.go handles terraform state import for prod-docker,
+// prod-infra, and prod-gateway resources by auto-detecting running Docker
+// containers, volumes, and images, then running "terragrunt import" per
+// environment with a per-resource confirmation step.
 package deploy
 
 import (
@@ -27,84 +28,109 @@ const (
 	KindHelmRelease ResourceKind = "helm_release" // prod-social
 )
 
-// ImportEntry maps a Terraform resource address to its Docker lookup name.
+// ImportEntry maps a Terraform resource address to its Docker lookup name,
+// scoped to a specific environment (each environment is a separate
+// terragrunt working dir / state file). Env uses the existing Environment
+// type from deploy.go (EnvDocker, EnvInfra, EnvGateway, ...) — NOT a
+// config.Env type, which doesn't exist in this codebase.
 type ImportEntry struct {
-	// TFAddress is the full terraform address: "docker_volume.notes_dist"
-	TFAddress string
-	// Kind is the Docker resource type.
-	Kind ResourceKind
-	// DockerName is the volume name, container name, or image repo:tag.
+	Env        Environment
+	TFAddress  string
+	Kind       ResourceKind
 	DockerName string
 }
 
-// dockerVolumeCatalog lists all docker_volume resources in prod-docker.
+// ─── prod-docker catalog ──────────────────────────────────────────────────
+
 var dockerVolumeCatalog = []ImportEntry{
-	{"docker_volume.notes_dist", KindVolume, "gateway_notes-dist"},
-	{"docker_volume.bank_dist", KindVolume, "gateway_bank-dist"},
-	{"docker_volume.quiz_dist", KindVolume, "gateway_quiz-dist"},
-	{"docker_volume.video_dist", KindVolume, "gateway_video-dist"},
-	{"docker_volume.api_dist", KindVolume, "gateway_api-dist"},
-	{"docker_volume.whisper_dist", KindVolume, "gateway_whisper-dist"},
-	{"docker_volume.notes_pgdata", KindVolume, "gateway_notes-pgdata"},
-	{"docker_volume.notes_static", KindVolume, "gateway_notes-static"},
-	{"docker_volume.notes_media", KindVolume, "gateway_notes-media"},
-	{"docker_volume.bank_pgdata", KindVolume, "gateway_bank-pgdata"},
-	{"docker_volume.doc_mysql", KindVolume, "gateway_doc-mysql"},
-	{"docker_volume.doc_minio", KindVolume, "gateway_doc-minio"},
-	{"docker_volume.doc_dist", KindVolume, "gateway_doc-dist"},
-	{"docker_volume.blog_mysql", KindVolume, "gateway_blog-mysql"},
-	{"docker_volume.blog_minio", KindVolume, "gateway_blog-minio"},
-	{"docker_volume.compiler_db_data", KindVolume, "gateway_compiler-db-data"},
-	{"docker_volume.compiler_server_data", KindVolume, "gateway_compiler-server-data"},
-	{"docker_volume.whisper_pgdata", KindVolume, "gateway_whisper-pgdata"},
-	{"docker_volume.whisper_minio_data", KindVolume, "whisper_minio_data"},
+	{EnvDocker, "docker_volume.notes_dist", KindVolume, "gateway_notes-dist"},
+	{EnvDocker, "docker_volume.bank_dist", KindVolume, "gateway_bank-dist"},
+	{EnvDocker, "docker_volume.quiz_dist", KindVolume, "gateway_quiz-dist"},
+	{EnvDocker, "docker_volume.video_dist", KindVolume, "gateway_video-dist"},
+	{EnvDocker, "docker_volume.api_dist", KindVolume, "gateway_api-dist"},
+	{EnvDocker, "docker_volume.whisper_dist", KindVolume, "gateway_whisper-dist"},
+	{EnvDocker, "docker_volume.notes_pgdata", KindVolume, "gateway_notes-pgdata"},
+	{EnvDocker, "docker_volume.notes_static", KindVolume, "gateway_notes-static"},
+	{EnvDocker, "docker_volume.notes_media", KindVolume, "gateway_notes-media"},
+	{EnvDocker, "docker_volume.bank_pgdata", KindVolume, "gateway_bank-pgdata"},
+	{EnvDocker, "docker_volume.doc_mysql", KindVolume, "gateway_doc-mysql"},
+	{EnvDocker, "docker_volume.doc_minio", KindVolume, "gateway_doc-minio"},
+	{EnvDocker, "docker_volume.doc_dist", KindVolume, "gateway_doc-dist"},
+	{EnvDocker, "docker_volume.blog_mysql", KindVolume, "gateway_blog-mysql"},
+	{EnvDocker, "docker_volume.blog_minio", KindVolume, "gateway_blog-minio"},
+	{EnvDocker, "docker_volume.compiler_db_data", KindVolume, "gateway_compiler-db-data"},
+	{EnvDocker, "docker_volume.compiler_server_data", KindVolume, "gateway_compiler-server-data"},
+	{EnvDocker, "docker_volume.whisper_pgdata", KindVolume, "gateway_whisper-pgdata"},
+	{EnvDocker, "docker_volume.whisper_minio_data", KindVolume, "whisper_minio_data"},
 }
 
-// dockerContainerCatalog lists the "support" docker_container resources in
-// prod-docker (postgres/mysql/minio sidecars and *_frontend_build one-shot
-// build containers). These are declared directly in main.tf, not via the
-// docker_app module.
+// dockerContainerCatalog: "support" containers (postgres/mysql/minio sidecars
+// and *_frontend_build one-shot build containers) declared directly in
+// prod-docker/main.tf, not via the docker_app module.
 var dockerContainerCatalog = []ImportEntry{
-	{"docker_container.notes_postgres", KindContainer, "notes-postgres"},
-	{"docker_container.notes_frontend_build", KindContainer, "notes-frontend-build"},
-	{"docker_container.whisper-postgres", KindContainer, "gateway_whisper-pgdata"},
-	{"docker_container.whisper_minio", KindContainer, "whisper-minio"},
-	{"docker_container.whisper_frontend_build", KindContainer, "whisper-frontend-build"},
-	{"docker_container.bank_postgres", KindContainer, "bank-postgres"},
-	{"docker_container.bank_frontend_build", KindContainer, "bank-frontend-build"},
-	{"docker_container.quiz_frontend_build", KindContainer, "quiz-frontend-build"},
-	{"docker_container.compiler_db", KindContainer, "compiler-db"},
-	{"docker_container.video_frontend_build", KindContainer, "video-frontend-build"},
-	{"docker_container.blog_db", KindContainer, "blog-db"},
-	{"docker_container.blog_minio", KindContainer, "blog-minio"},
-	{"docker_container.blog_minio_init", KindContainer, "blog-minio-init"},
-	{"docker_container.api_service_frontend_build", KindContainer, "api-service-frontend-build"},
-	{"docker_container.doc_mysql", KindContainer, "doc-mysql"},
-	{"docker_container.doc_minio", KindContainer, "doc-minio"},
-	{"docker_container.doc_frontend_build", KindContainer, "doc-frontend-build"},
+	{EnvDocker, "docker_container.notes_postgres", KindContainer, "notes-postgres"},
+	{EnvDocker, "docker_container.notes_frontend_build", KindContainer, "notes-frontend-build"},
+	{EnvDocker, "docker_container.whisper-postgres", KindContainer, "gateway_whisper-pgdata"},
+	{EnvDocker, "docker_container.whisper_minio", KindContainer, "whisper-minio"},
+	{EnvDocker, "docker_container.whisper_frontend_build", KindContainer, "whisper-frontend-build"},
+	{EnvDocker, "docker_container.bank_postgres", KindContainer, "bank-postgres"},
+	{EnvDocker, "docker_container.bank_frontend_build", KindContainer, "bank-frontend-build"},
+	{EnvDocker, "docker_container.quiz_frontend_build", KindContainer, "quiz-frontend-build"},
+	{EnvDocker, "docker_container.compiler_db", KindContainer, "compiler-db"},
+	{EnvDocker, "docker_container.video_frontend_build", KindContainer, "video-frontend-build"},
+	{EnvDocker, "docker_container.blog_db", KindContainer, "blog-db"},
+	{EnvDocker, "docker_container.blog_minio", KindContainer, "blog-minio"},
+	{EnvDocker, "docker_container.blog_minio_init", KindContainer, "blog-minio-init"},
+	{EnvDocker, "docker_container.api_service_frontend_build", KindContainer, "api-service-frontend-build"},
+	{EnvDocker, "docker_container.doc_mysql", KindContainer, "doc-mysql"},
+	{EnvDocker, "docker_container.doc_minio", KindContainer, "doc-minio"},
+	{EnvDocker, "docker_container.doc_frontend_build", KindContainer, "doc-frontend-build"},
 }
 
-// dockerAppContainerCatalog lists the docker_container.app resource created
-// by each instance of the generic "../../modules/docker_app" module. This
-// was previously missing from the catalog entirely, which is why the import
-// scanner reported "No matching Docker resources found" even though these
-// were exactly the containers causing "name already in use" conflicts on
-// apply. TFAddress must be "module.<instance_name>.docker_container.app" —
-// the module's internal resource is always named "app" (see
-// modules/docker_app/main.tf line 1). DockerName must match each module's
-// `name` argument EXACTLY, including the whisper_backend underscore
-// inconsistency (it uses "whisper_backend", not "whisper-backend", unlike
-// every other module instance which uses hyphens).
+// dockerAppContainerCatalog: docker_container.app resource created by each
+// instance of "../../modules/docker_app" inside prod-docker/main.tf.
 var dockerAppContainerCatalog = []ImportEntry{
-	{"module.notes_backend.docker_container.app", KindContainer, "notes-backend"},
-	{"module.whisper_backend.docker_container.app", KindContainer, "whisper_backend"}, // underscore, not a typo
-	{"module.bank_backend.docker_container.app", KindContainer, "bank-backend"},
-	{"module.compiler_server.docker_container.app", KindContainer, "compiler-server"},
-	{"module.video_backend.docker_container.app", KindContainer, "video-uploader-backend"},
-	{"module.hospital_management.docker_container.app", KindContainer, "hospital-management"},
-	{"module.blog_website.docker_container.app", KindContainer, "blog-website"},
-	{"module.api_service_backend.docker_container.app", KindContainer, "api-service-backend"},
-	{"module.doc_backend.docker_container.app", KindContainer, "doc-backend"},
+	{EnvDocker, "module.notes_backend.docker_container.app", KindContainer, "notes-backend"},
+	{EnvDocker, "module.whisper_backend.docker_container.app", KindContainer, "whisper_backend"}, // underscore, not a typo
+	{EnvDocker, "module.bank_backend.docker_container.app", KindContainer, "bank-backend"},
+	{EnvDocker, "module.compiler_server.docker_container.app", KindContainer, "compiler-server"},
+	{EnvDocker, "module.video_backend.docker_container.app", KindContainer, "video-uploader-backend"},
+	{EnvDocker, "module.hospital_management.docker_container.app", KindContainer, "hospital-management"},
+	{EnvDocker, "module.blog_website.docker_container.app", KindContainer, "blog-website"},
+	{EnvDocker, "module.api_service_backend.docker_container.app", KindContainer, "api-service-backend"},
+	{EnvDocker, "module.doc_backend.docker_container.app", KindContainer, "doc-backend"},
+}
+
+// ─── prod-infra catalog ────────────────────────────────────────────────────
+// Entries marked UNVERIFIED are inferred from `docker ps` names + the
+// resource addresses seen in your apply-error logs (docker_container.jenkins
+// at main.tf:162, module.node_exporter.docker_container.app, docker_volume
+// .jenkins_home name="jenkins_home", docker_volume.atlantis_data
+// name="gateway_atlantis-data"). I don't have prod-infra/main.tf, so the
+// exact `name` attribute for jenkins_agent, atlantis, otel_gateway, and
+// nginx_exporter is a best guess. If an import 404s or matches the wrong
+// container, run and paste:
+//   rg "resource \"docker_(container|volume)\"" -A 6 ~/.social-platform/infra/environments/prod-infra/main.tf
+var dockerInfraContainerCatalog = []ImportEntry{
+	{EnvInfra, "docker_container.jenkins", KindContainer, "jenkins"},
+	{EnvInfra, "docker_container.jenkins_agent", KindContainer, "jenkins-agent"},           // UNVERIFIED
+	{EnvInfra, "docker_container.atlantis", KindContainer, "atlantis"},                     // UNVERIFIED
+	{EnvInfra, "docker_container.otel_gateway", KindContainer, "otel-gateway"},              // UNVERIFIED — currently failing to start, name guessed
+	{EnvInfra, "docker_container.nginx_exporter", KindContainer, "nginx-exporter"},          // UNVERIFIED
+	{EnvInfra, "module.node_exporter.docker_container.app", KindContainer, "node-exporter"}, // confirmed via error log
+}
+
+var dockerInfraVolumeCatalog = []ImportEntry{
+	{EnvInfra, "docker_volume.jenkins_home", KindVolume, "jenkins_home"},
+	{EnvInfra, "docker_volume.atlantis_data", KindVolume, "gateway_atlantis-data"},
+	{EnvInfra, "docker_volume.n8n_data", KindVolume, "n8n_data"}, // UNVERIFIED name
+}
+
+// ─── prod-gateway catalog ──────────────────────────────────────────────────
+// UNVERIFIED: I don't have prod-gateway/main.tf. Run and paste:
+//   rg "resource \"docker_container\"" -A 6 ~/.social-platform/infra/environments/prod-gateway/main.tf
+var dockerGatewayContainerCatalog = []ImportEntry{
+	{EnvGateway, "docker_container.gateway", KindContainer, "gateway"}, // UNVERIFIED resource address
 }
 
 // docker_image resources are NOT in any catalog — kreuzwerker/docker v3.x
@@ -116,61 +142,72 @@ type ImportCandidate struct {
 	ImportID string // the ID that Terraform needs for import
 }
 
-// DetectImportCandidates queries Docker for all known prod-docker resources and
-// returns those that exist locally AND are not yet in Terraform state.
+// scannedEnvironments lists every environment DetectImportCandidates scans.
+// prod-social (Kubernetes/Helm) and prod-manage are intentionally excluded —
+// this importer only handles Docker-provider resources.
+var scannedEnvironments = []Environment{EnvDocker, EnvInfra, EnvGateway}
+
+// catalogForEnv returns every ImportEntry declared for a given environment.
+func catalogForEnv(env Environment) []ImportEntry {
+	var all []ImportEntry
+	all = append(all, dockerVolumeCatalog...)
+	all = append(all, dockerContainerCatalog...)
+	all = append(all, dockerAppContainerCatalog...)
+	all = append(all, dockerInfraContainerCatalog...)
+	all = append(all, dockerInfraVolumeCatalog...)
+	all = append(all, dockerGatewayContainerCatalog...)
+
+	var filtered []ImportEntry
+	for _, e := range all {
+		if e.Env == env {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
+}
+
+// DetectImportCandidates queries Docker once, then checks every known
+// resource across all scanned environments (prod-docker, prod-infra,
+// prod-gateway) against each environment's own Terraform state, returning
+// those that exist in Docker but aren't yet tracked.
 func DetectImportCandidates(cfg *config.Config) ([]ImportCandidate, error) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		return nil, fmt.Errorf("docker not found in PATH — is Docker installed?")
 	}
 
-	// Resources already tracked in state must never be offered again --
-	// terraform import refuses (and errors) on an address it already
-	// manages. An empty/missing state (never applied yet) just means
-	// everything found in Docker is a valid candidate.
-	inState, err := existingStateAddresses(cfg)
+	existingVolumes, err := listDockerVolumes()
 	if err != nil {
-		ui.Warn("Could not read terraform state, assuming it's empty: %v", err)
-		inState = map[string]bool{}
+		ui.Warn("Could not list docker volumes: %v", err)
+		existingVolumes = map[string]string{}
+	}
+	existingContainers, err := listDockerContainers()
+	if err != nil {
+		ui.Warn("Could not list docker containers: %v", err)
+		existingContainers = map[string]string{}
 	}
 
 	var candidates []ImportCandidate
 
-	// ── Volumes ──────────────────────────────────────────────────────────────
-	existingVolumes, err := listDockerVolumes()
-	if err != nil {
-		ui.Warn("Could not list docker volumes: %v", err)
-	} else {
-		for _, entry := range dockerVolumeCatalog {
-			if inState[entry.TFAddress] {
-				continue
-			}
-			if id, ok := existingVolumes[entry.DockerName]; ok {
-				candidates = append(candidates, ImportCandidate{Entry: entry, ImportID: id})
-			}
-		}
-	}
-
-	// ── Containers (support: postgres/mysql/minio/*_frontend_build) ────────────
-	existingContainers, err := listDockerContainers()
-	if err != nil {
-		ui.Warn("Could not list docker containers: %v", err)
-	} else {
-		for _, entry := range dockerContainerCatalog {
-			if inState[entry.TFAddress] {
-				continue
-			}
-			if id, ok := existingContainers[entry.DockerName]; ok {
-				candidates = append(candidates, ImportCandidate{Entry: entry, ImportID: id})
-			}
+	for _, env := range scannedEnvironments {
+		inState, err := existingStateAddresses(cfg, env)
+		if err != nil {
+			ui.Warn("Could not read terraform state for %s, assuming it's empty: %v", env, err)
+			inState = map[string]bool{}
 		}
 
-		// ── Containers (docker_app module instances) ───────────────────────
-		for _, entry := range dockerAppContainerCatalog {
+		for _, entry := range catalogForEnv(env) {
 			if inState[entry.TFAddress] {
 				continue
 			}
-			if id, ok := existingContainers[entry.DockerName]; ok {
-				candidates = append(candidates, ImportCandidate{Entry: entry, ImportID: id})
+			switch entry.Kind {
+			case KindVolume:
+				if id, ok := existingVolumes[entry.DockerName]; ok {
+					candidates = append(candidates, ImportCandidate{Entry: entry, ImportID: id})
+				}
+			case KindContainer:
+				if id, ok := existingContainers[entry.DockerName]; ok {
+					candidates = append(candidates, ImportCandidate{Entry: entry, ImportID: id})
+				}
 			}
 		}
 	}
@@ -182,11 +219,11 @@ func DetectImportCandidates(cfg *config.Config) ([]ImportCandidate, error) {
 }
 
 // existingStateAddresses returns the set of resource addresses Terraform
-// already manages in prod-docker, via `terragrunt state list`.
-func existingStateAddresses(cfg *config.Config) (map[string]bool, error) {
-	dir := WorkDir(cfg, EnvDocker)
+// already manages in the given environment, via `terragrunt state list`.
+func existingStateAddresses(cfg *config.Config, env Environment) (map[string]bool, error) {
+	dir := WorkDir(cfg, env)
 	if _, err := os.Stat(dir); err != nil {
-		return nil, fmt.Errorf("prod-docker directory not found: %s", dir)
+		return nil, fmt.Errorf("%s directory not found: %s", env, dir)
 	}
 
 	cmd := exec.Command("terragrunt", "state", "list")
@@ -212,11 +249,12 @@ func existingStateAddresses(cfg *config.Config) (map[string]bool, error) {
 	return addrs, nil
 }
 
-// RunImport runs terragrunt import for a single candidate in the prod-docker env.
+// RunImport runs terragrunt import for a single candidate, in whichever
+// environment's working dir that candidate belongs to.
 func RunImport(cfg *config.Config, candidate ImportCandidate) error {
-	dir := WorkDir(cfg, EnvDocker)
+	dir := WorkDir(cfg, candidate.Entry.Env)
 	if _, err := os.Stat(dir); err != nil {
-		return fmt.Errorf("prod-docker directory not found: %s", dir)
+		return fmt.Errorf("%s directory not found: %s", candidate.Entry.Env, dir)
 	}
 
 	ui.Cyan.Printf("\n  $ terragrunt import %s %s\n", candidate.Entry.TFAddress, candidate.ImportID)
@@ -229,7 +267,7 @@ func RunImport(cfg *config.Config, candidate ImportCandidate) error {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("import of %s failed: %w", candidate.Entry.TFAddress, err)
+		return fmt.Errorf("import of %s (%s) failed: %w", candidate.Entry.TFAddress, candidate.Entry.Env, err)
 	}
 	return nil
 }

@@ -10,6 +10,8 @@ terraform {
   }
 }
 
+
+
 provider "docker" {
   host = var.docker_host
 }
@@ -25,6 +27,11 @@ locals {
   # loki-config.yml, etc.) is now referenced directly from git by the ArgoCD
   # Applications in gitops/observability/apps/, not read by Terraform.
   obs_path = "${var.projects_dir}/platform/observability"
+}
+
+module "network" {
+  source = "../../modules/networking"
+  name   = "gateway-net"
 }
 
 # ---------------------------------------------------------------------------
